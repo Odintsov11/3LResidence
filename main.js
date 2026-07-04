@@ -27,9 +27,6 @@
     counters: {
       duration: 1.5,
     },
-    accordion: {
-      maxCachedThumbnails: 5,
-    },
     guestroomTabs: {
       retryAttempts: 10,
       retryDelay: 200,
@@ -37,12 +34,8 @@
     resizeDebounce: 250,
   };
 
-  // Set to true to disable animations for users with reduced-motion preference.
-  const RESPECT_REDUCED_MOTION = false;
-
   const REDUCED_MOTION =
-    RESPECT_REDUCED_MOTION &&
-    (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
   /* ── 2. Utils ──────────────────────────────────── */
 
@@ -68,24 +61,6 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
-  }
-
-  function parseJSONAttr(str) {
-    if (typeof str !== "string") {
-      return null;
-    }
-
-    const trimmed = str.trim();
-
-    if (!trimmed || !/^[[{"]/.test(trimmed)) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return null;
-    }
   }
 
   function toInt(value, fallback = 0) {
@@ -128,19 +103,42 @@
     const grouped = {};
 
     items.forEach((item) => {
+      const group = (item.getAttribute("data-group") || "default")
+        .toLowerCase()
+        .trim();
+
+      const images = Array.from(
+        item.querySelectorAll(".js-slider-image-source")
+      )
+        .map((image) => {
+          const url = (
+            image.currentSrc ||
+            image.getAttribute("src") ||
+            ""
+          ).trim();
+
+          const alt = (image.getAttribute("alt") || "").trim();
+
+          return {
+            url,
+            alt,
+          };
+        })
+        .filter((image) => image.url);
+
       const slide = {
-        group: (item.getAttribute("data-group") || "default")
+        group,
+        tabName: (item.getAttribute("data-tab") || "").trim(),
+        title: (item.getAttribute("data-title") || "").trim(),
+        description: (item.getAttribute("data-desc") || "").trim(),
+        gridTemplate: (item.getAttribute("data-grid") || "default")
           .toLowerCase()
           .trim(),
-        tabName: item.getAttribute("data-tab"),
-        title: item.getAttribute("data-title"),
-        description: item.getAttribute("data-desc"),
-        gridTemplate: item.getAttribute("data-grid") || "default",
         order: toInt(item.getAttribute("data-order")),
-        images: parseJSONAttr(item.getAttribute("data-images")) || [],
+        images,
       };
 
-      (grouped[slide.group] ??= []).push(slide);
+      (grouped[group] ??= []).push(slide);
     });
 
     Object.values(grouped).forEach((slides) => {
@@ -153,282 +151,270 @@
   /* ── 4a. Brands accordion ──────────────────────── */
 
   function initBrandsAccordion() {
-    const sourceNodes = document.querySelectorAll(".js-data-accordeon");
     const accordion = document.querySelector(".brands_accordion");
     const mask = document.querySelector(".brands_mask");
 
-    if (!sourceNodes.length || !accordion || !mask) {
+    if (!accordion || !mask) return;
+
+    if (accordion.dataset.initialized === "true") return;
+    accordion.dataset.initialized = "true";
+
+    const items = Array.from(accordion.querySelectorAll(".brands_item"));
+
+    const images = Array.from(mask.querySelectorAll(".brands_image"));
+
+    const positions = Array.from(
+      accordion.querySelectorAll(".brands_position")
+    );
+
+    const thumbnailContainer = mask.querySelector(".brands_thumbnail");
+
+    if (!items.length || !images.length || !thumbnailContainer) {
       return;
     }
 
-    const data = Array.from(sourceNodes)
-      .map((node) => {
-        const rawImage = node.getAttribute("data-image");
-        let images = [];
+    let activeImage = images[0] || null;
+    let activeThumbnailUrl = "";
 
-        if (rawImage && rawImage.trim() && rawImage !== "Main Image") {
-          const parsed = parseJSONAttr(rawImage);
+    // Invalidates in-flight thumbnail loads when hover changes.
+    let hoverToken = 0;
 
-          if (parsed) {
-            images = Array.isArray(parsed) ? parsed : [parsed];
-          } else {
-            images = [{ url: rawImage.trim() }];
-          }
-        }
+    /*
+     * Начальное состояние основных изображений
+     */
+    images.forEach((image, index) => {
+      gsap.set(image, {
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+        zIndex: index === 0 ? 10 : 1,
+        clipPath: index === 0 ? "inset(0 0% 0 0)" : "inset(0 100% 0 0)",
+      });
+    });
 
-        return {
-          title: node.getAttribute("data-title") || "",
-          content: parseJSONAttr(node.getAttribute("data-content")) || [],
-          images,
-          order: toInt(node.getAttribute("data-order")),
-        };
-      })
-      .sort((a, b) => a.order - b.order);
+    /*
+     * Начальное состояние thumbnail
+     */
+    gsap.set(thumbnailContainer, {
+      opacity: 0,
+      y: 80,
+      pointerEvents: "none",
+    });
 
-    if (!data.length) {
-      return;
-    }
+    /*
+     * Подготовка CMS-позиций.
+     * Изображение НЕ грузится заранее — только при первом hover.
+     * Пустые CMS-поля (w-dyn-bind-empty / плейсхолдер) не считаются thumbnail.
+     */
+    positions.forEach((position) => {
+      const source = position.querySelector(".brands_position-source");
 
-    accordion.innerHTML = "";
-    mask.innerHTML = "";
+      const thumbnailUrl =
+        source?.currentSrc || source?.getAttribute("src") || "";
 
-    const thumbnails = document.createElement("div");
-    thumbnails.className = "brands_thumbnails";
-    mask.appendChild(thumbnails);
+      const isEmpty =
+        !thumbnailUrl || source.classList.contains("w-dyn-bind-empty");
 
-    const imagesFragment = document.createDocumentFragment();
-    const firstImageByItem = new Map();
-
-    const accordionHtml = data
-      .map((item, itemIndex) => {
-        const contentHtml = (Array.isArray(item.content) ? item.content : [])
-          .map((position) => {
-            const thumbnail = (position.thumbnail || "").trim();
-
-            return thumbnail
-              ? `<div class="brands_position has_thumbnail" data-thumbnail="${escapeHtml(
-                  thumbnail
-                )}">${escapeHtml(position.text)}</div>`
-              : `<div class="brands_position">${escapeHtml(
-                  position.text
-                )}</div>`;
-          })
-          .join("");
-
-        item.images.forEach((imageData, imageIndex) => {
-          if (!imageData?.url) {
-            return;
-          }
-
-          const image = document.createElement("img");
-          const isInitial = itemIndex === 0 && imageIndex === 0;
-
-          image.src = imageData.url;
-          image.alt = imageData.alt || item.title;
-          image.className = "brands_image";
-
-          gsap.set(image, {
-            zIndex: isInitial ? 10 : 1,
-            clipPath: isInitial ? "inset(0 0 0 0)" : "inset(0 100% 0 0)",
-          });
-
-          if (!firstImageByItem.has(itemIndex)) {
-            firstImageByItem.set(itemIndex, image);
-          }
-
-          imagesFragment.appendChild(image);
-        });
-
-        return `
-          <div class="brands_item${itemIndex === 0 ? " is-active" : ""}">
-            <div class="brands_heading">
-              <div class="brands_title">${escapeHtml(item.title)}</div>
-
-              <div class="brands_icon${itemIndex === 0 ? " is-active" : ""}">
-                <div class="icon-1x1-small w-embed">
-                  <svg viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 0a12 12 0 1 0 12 12A12.013 12.013 0 0 0 12 0zm4 13h-3v3a1 1 0 0 1-2 0v-3H8a1 1 0 0 1 0-2h3V8a1 1 0 0 1 2 0v3h3a1 1 0 0 1 0 2z"/>
-                  </svg>
-                </div>
-              </div>
-
-              <div class="brands_accordion-line"></div>
-            </div>
-
-            <div
-              class="brands_content${itemIndex === 0 ? " is-active" : ""}"
-              style="height:${itemIndex === 0 ? "auto" : "0px"}"
-            >
-              <div class="brands_wrapper">
-                ${contentHtml}
-              </div>
-            </div>
-          </div>
-        `;
-      })
-      .join("");
-
-    accordion.innerHTML = accordionHtml;
-    mask.appendChild(imagesFragment);
-
-    accordion.addEventListener("mouseover", (event) => {
-      const position = event.target.closest(".has_thumbnail");
-
-      if (position && accordion.contains(position)) {
-        showThumbnail(position.dataset.thumbnail);
+      if (isEmpty) {
+        position.classList.remove("has_thumbnail");
+        return;
       }
+
+      position.classList.add("has_thumbnail");
+      position.dataset.thumbnail = thumbnailUrl;
+    });
+
+    /*
+     * Hover по позиции материала
+     */
+    accordion.addEventListener("mouseover", (event) => {
+      const position = event.target.closest(".brands_position.has_thumbnail");
+
+      if (!position || !accordion.contains(position)) {
+        return;
+      }
+
+      if (event.relatedTarget && position.contains(event.relatedTarget)) {
+        return;
+      }
+
+      showThumbnail(position.dataset.thumbnail);
     });
 
     accordion.addEventListener("mouseout", (event) => {
-      const position = event.target.closest(".has_thumbnail");
+      const position = event.target.closest(".brands_position.has_thumbnail");
 
-      if (position && !position.contains(event.relatedTarget)) {
-        hideThumbnails();
+      if (!position || !accordion.contains(position)) {
+        return;
       }
+
+      if (event.relatedTarget && position.contains(event.relatedTarget)) {
+        return;
+      }
+
+      hideThumbnail();
     });
 
-    // Preload thumbnails so hover feels instant.
-    accordion.querySelectorAll(".has_thumbnail").forEach((element) => {
-      imageLoader.load(element.dataset.thumbnail);
-    });
-
-    function showThumbnail(url) {
-      if (!url) {
-        return;
-      }
-
-      const existing = thumbnails.querySelector(
-        `[data-src="${CSS.escape(url)}"]`
-      );
-
-      if (existing) {
-        gsap.to(existing, {
-          opacity: 1,
-          y: 0,
-          duration: 0.3,
-          ease: "power2.out",
-        });
-
-        return;
-      }
-
-      const thumbnail = document.createElement("div");
-
-      thumbnail.className = "brands_thumbnail";
-      thumbnail.dataset.src = url;
-      thumbnail.style.backgroundImage = `url("${url}")`;
-
-      gsap.set(thumbnail, {
-        opacity: 0,
-        y: 80,
-      });
-
-      thumbnails.appendChild(thumbnail);
-
-      gsap.to(thumbnail, {
-        opacity: 1,
-        y: 0,
-        duration: 0.4,
-        ease: "power2.out",
-      });
-    }
-
-    function hideThumbnails() {
-      const allThumbnails = thumbnails.querySelectorAll(".brands_thumbnail");
-
-      if (!allThumbnails.length) {
-        return;
-      }
-
-      gsap.to(allThumbnails, {
-        opacity: 0,
-        y: 80,
-        duration: 0.3,
-        ease: "power2.in",
-        onComplete: () => {
-          const max = CONFIG.accordion.maxCachedThumbnails;
-
-          if (allThumbnails.length > max) {
-            [...allThumbnails]
-              .slice(0, -max)
-              .forEach((element) => element.remove());
-          }
-        },
-      });
-    }
-
-    const items = accordion.querySelectorAll(".brands_item");
-    let activeImage = firstImageByItem.get(0) || null;
-
+    /*
+     * Клик по заголовку аккордеона
+     */
     accordion.addEventListener("click", (event) => {
       const heading = event.target.closest(".brands_heading");
 
-      if (!heading) {
+      if (!heading || !accordion.contains(heading)) {
         return;
       }
 
       const item = heading.closest(".brands_item");
-      const itemIndex = Array.from(items).indexOf(item);
 
-      if (item.classList.contains("is-active")) {
+      if (!item) return;
+
+      const itemIndex = items.indexOf(item);
+      const isActive = item.classList.contains("is-active");
+
+      hideThumbnail();
+
+      if (isActive) {
         closeItem(item);
         showImage(0);
-      } else {
-        items.forEach((currentItem) => {
-          if (currentItem.classList.contains("is-active")) {
-            closeItem(currentItem);
-          }
-        });
+        return;
+      }
 
-        openItem(item);
-        showImage(itemIndex);
+      items.forEach((currentItem) => {
+        if (currentItem.classList.contains("is-active")) {
+          closeItem(currentItem);
+        }
+      });
+
+      openItem(item);
+      showImage(itemIndex);
+    });
+
+    /*
+     * Начальное состояние аккордеона:
+     * первая комната открыта
+     */
+    items.forEach((item, index) => {
+      const isActive = index === 0;
+
+      const heading = item.querySelector(".brands_heading");
+      const content = item.querySelector(".brands_content");
+      const icon = item.querySelector(".brands_icon");
+      const line = item.querySelector(".brands_accordion-line");
+
+      item.classList.toggle("is-active", isActive);
+      content?.classList.toggle("is-active", isActive);
+      icon?.classList.toggle("is-active", isActive);
+
+      heading?.setAttribute("aria-expanded", String(isActive));
+
+      if (content) {
+        gsap.set(content, {
+          height: isActive ? "auto" : 0,
+          overflow: "hidden",
+        });
+      }
+
+      if (line) {
+        gsap.set(line, {
+          width: isActive ? 0 : "100%",
+        });
+      }
+
+      if (icon) {
+        gsap.set(icon, {
+          rotation: isActive ? 45 : 0,
+          opacity: isActive ? 0.2 : 1,
+        });
       }
     });
 
     function openItem(item) {
+      const heading = item.querySelector(".brands_heading");
+      const content = item.querySelector(".brands_content");
+      const icon = item.querySelector(".brands_icon");
+      const line = item.querySelector(".brands_accordion-line");
+
       item.classList.add("is-active");
+      content?.classList.add("is-active");
+      icon?.classList.add("is-active");
 
-      gsap.to(item.querySelector(".brands_content"), {
-        height: "auto",
-        duration: 0.5,
-        ease: "power2.out",
-      });
+      heading?.setAttribute("aria-expanded", "true");
 
-      gsap.to(item.querySelector(".brands_accordion-line"), {
-        width: 0,
-        duration: 0.5,
-      });
+      if (content) {
+        gsap.to(content, {
+          height: "auto",
+          duration: 0.5,
+          ease: "power2.out",
+          overwrite: true,
+        });
+      }
 
-      gsap.to(item.querySelector(".brands_icon"), {
-        opacity: 0.2,
-        rotation: 45,
-        duration: 0.5,
-      });
+      if (line) {
+        gsap.to(line, {
+          width: 0,
+          duration: 0.5,
+          ease: "power2.out",
+          overwrite: true,
+        });
+      }
+
+      if (icon) {
+        gsap.to(icon, {
+          rotation: 45,
+          opacity: 0.2,
+          duration: 0.5,
+          ease: "power2.out",
+          overwrite: true,
+        });
+      }
     }
 
     function closeItem(item) {
+      const heading = item.querySelector(".brands_heading");
+      const content = item.querySelector(".brands_content");
+      const icon = item.querySelector(".brands_icon");
+      const line = item.querySelector(".brands_accordion-line");
+
       item.classList.remove("is-active");
+      content?.classList.remove("is-active");
+      icon?.classList.remove("is-active");
 
-      gsap.to(item.querySelector(".brands_content"), {
-        height: 0,
-        duration: 0.4,
-        ease: "power2.out",
-      });
+      heading?.setAttribute("aria-expanded", "false");
 
-      gsap.to(item.querySelector(".brands_accordion-line"), {
-        width: "100%",
-        duration: 0.4,
-      });
+      if (content) {
+        gsap.to(content, {
+          height: 0,
+          duration: 0.4,
+          ease: "power2.out",
+          overwrite: true,
+        });
+      }
 
-      gsap.to(item.querySelector(".brands_icon"), {
-        opacity: 1,
-        rotation: 0,
-        duration: 0.4,
-      });
+      if (line) {
+        gsap.to(line, {
+          width: "100%",
+          duration: 0.4,
+          ease: "power2.out",
+          overwrite: true,
+        });
+      }
+
+      if (icon) {
+        gsap.to(icon, {
+          rotation: 0,
+          opacity: 1,
+          duration: 0.4,
+          ease: "power2.out",
+          overwrite: true,
+        });
+      }
     }
 
-    function showImage(itemIndex) {
-      const nextImage = firstImageByItem.get(itemIndex);
+    function showImage(index) {
+      const nextImage = images[index];
 
       if (!nextImage || nextImage === activeImage) {
         return;
@@ -436,6 +422,8 @@
 
       const previousImage = activeImage;
       activeImage = nextImage;
+
+      gsap.killTweensOf(images);
 
       const timeline = gsap.timeline();
 
@@ -470,6 +458,58 @@
           },
           0.4
         );
+    }
+
+    /*
+     * Ленивая загрузка thumbnail: изображение запрашивается
+     * при первом hover, дальше берётся из кэша imageLoader.
+     */
+    async function showThumbnail(url) {
+      if (!url) return;
+
+      const token = ++hoverToken;
+
+      const image = await imageLoader.load(url);
+
+      // Курсор уже ушёл или картинка не загрузилась.
+      if (token !== hoverToken || !image) {
+        return;
+      }
+
+      gsap.killTweensOf(thumbnailContainer);
+
+      if (activeThumbnailUrl !== url) {
+        activeThumbnailUrl = url;
+
+        thumbnailContainer.style.backgroundImage = `url("${url}")`;
+
+        gsap.set(thumbnailContainer, {
+          opacity: 0,
+          y: 50,
+        });
+      }
+
+      gsap.to(thumbnailContainer, {
+        opacity: 1,
+        y: 0,
+        duration: 0.4,
+        ease: "power2.out",
+        overwrite: true,
+      });
+    }
+
+    function hideThumbnail() {
+      hoverToken += 1;
+
+      gsap.killTweensOf(thumbnailContainer);
+
+      gsap.to(thumbnailContainer, {
+        opacity: 0,
+        y: 80,
+        duration: 0.3,
+        ease: "power2.in",
+        overwrite: true,
+      });
     }
   }
 
@@ -959,7 +999,15 @@
         return;
       }
 
-      const slides = swiperElement.querySelectorAll(".swiper-slide");
+      const wrapper = Array.from(swiperElement.children).find((element) =>
+        element.classList.contains("swiper-wrapper")
+      );
+
+      const slides = wrapper
+        ? Array.from(wrapper.children).filter((element) =>
+            element.classList.contains("swiper-slide")
+          )
+        : [];
 
       if (!slides.length) {
         return;
@@ -1106,51 +1154,37 @@
         tab.setAttribute("tabindex", index === 0 ? "0" : "-1");
       });
 
-      const abortController = new AbortController();
-
       const activateTab = (index) => {
         swiper.slideTo(index === 0 ? firstIndex : secondIndex, 300);
       };
 
       tabs.forEach((tab, index) => {
-        tab.addEventListener(
-          "click",
-          (event) => {
-            event.preventDefault();
-            activateTab(index);
-          },
-          {
-            signal: abortController.signal,
-          }
-        );
+        tab.addEventListener("click", (event) => {
+          event.preventDefault();
+          activateTab(index);
+        });
       });
 
-      tabsWrapper?.addEventListener(
-        "keydown",
-        (event) => {
-          if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") {
-            return;
-          }
-
-          event.preventDefault();
-
-          const current = tabs.findIndex(
-            (tab) => tab.getAttribute("aria-selected") === "true"
-          );
-
-          const next =
-            (Math.max(current, 0) +
-              (event.key === "ArrowRight" ? 1 : -1) +
-              tabs.length) %
-            tabs.length;
-
-          activateTab(next);
-          tabs[next].focus();
-        },
-        {
-          signal: abortController.signal,
+      tabsWrapper?.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") {
+          return;
         }
-      );
+
+        event.preventDefault();
+
+        const current = tabs.findIndex(
+          (tab) => tab.getAttribute("aria-selected") === "true"
+        );
+
+        const next =
+          (Math.max(current, 0) +
+            (event.key === "ArrowRight" ? 1 : -1) +
+            tabs.length) %
+          tabs.length;
+
+        activateTab(next);
+        tabs[next].focus();
+      });
 
       function updateTabsState() {
         const currentIndex = swiper.activeIndex;
@@ -1204,6 +1238,88 @@
 
       updateTabsState();
     }
+  }
+
+  function prepareGuestroomSwiper() {
+    const root = document.querySelector(".swiper-guestroom");
+
+    if (!root) {
+      return;
+    }
+
+    if (root.dataset.slidesPrepared === "true") {
+      return;
+    }
+
+    const targetWrapper = root.querySelector(":scope > .js-guestroom-wrapper");
+
+    const sources = root.querySelector(".guestroom_sources");
+
+    const galleries = Array.from(
+      root.querySelectorAll(".guestroom_sources .js-guestroom-gallery")
+    );
+
+    if (!targetWrapper || !sources || !galleries.length) {
+      console.warn("[3L] Guestroom swiper structure is incomplete.");
+
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    galleries.slice(0, 2).forEach((gallery, galleryIndex) => {
+      const room = galleryIndex === 0 ? "first" : "second";
+
+      /*
+       * Класс .js-guestroom-slide стоит на Collection List,
+       * а настоящие слайды — его прямые дочерние элементы.
+       */
+      const sourceList = gallery.querySelector(".js-guestroom-slide");
+
+      if (!sourceList) {
+        return;
+      }
+
+      const slides = Array.from(sourceList.children).filter((element) =>
+        element.classList.contains("swiper-slide")
+      );
+
+      slides.forEach((slide) => {
+        slide.dataset.room = room;
+
+        /*
+         * Удаляем возможные состояния от прежней
+         * ошибочной инициализации.
+         */
+        slide.classList.remove(
+          "swiper-slide-active",
+          "swiper-slide-next",
+          "swiper-slide-prev",
+          "swiper-slide-visible",
+          "swiper-slide-fully-visible"
+        );
+
+        slide.removeAttribute("data-revealed");
+        slide.removeAttribute("style");
+
+        fragment.appendChild(slide);
+      });
+    });
+
+    if (!fragment.childNodes.length) {
+      console.warn("[3L] No guestroom slides were found.");
+
+      return;
+    }
+
+    targetWrapper.replaceChildren(fragment);
+
+    /*
+     * После переноса исходные CMS-обёртки пустые.
+     */
+    sources.remove();
+
+    root.dataset.slidesPrepared = "true";
   }
 
   /* ── 4g. Heading animations ────────────────────── */
@@ -1313,12 +1429,12 @@
       ignoreMobileResize: true,
     });
 
-    if (hasSmoother) {
+    if (hasSmoother && !REDUCED_MOTION) {
       ScrollSmoother.create({
         wrapper: ".page-wrapper",
         content: ".main-wrapper",
-        smooth: REDUCED_MOTION ? 0 : 1.5,
-        effects: !REDUCED_MOTION,
+        smooth: 1.5,
+        effects: true,
         smoothTouch: 0.1,
         normalizeScroll: true,
       });
@@ -1370,8 +1486,8 @@
 
       idle(
         () => {
+          prepareGuestroomSwiper();
           const swipers = initSwipers();
-
           initGuestroomTabs();
           initCounters();
 
