@@ -1,22 +1,13 @@
 /**
- * 3L Residences — main.js (рефакторинг)
- *
- * Структура:
- *   1. Конфиг и фиче-флаги
- *   2. Утилиты (debounce, escape, JSON, загрузчик картинок)
- *   3. Чтение данных из CMS-нод
- *   4. Модули: аккордеон, дивайдеры, счётчики, динамические слайдеры,
- *      Swiper, табы guestroom, заголовки
- *   5. Bootstrap
- *
- * Все модули изолированы (IIFE), ничего не утекает в window.
+ * 3L Residences — main.js
+ * Modules: config, utils, CMS data readers, brands accordion,
+ * divider reveals, counters, tabbed sliders, Swiper, guestroom tabs,
+ * heading animations, bootstrap. Everything is scoped inside an IIFE.
  */
 (() => {
   "use strict";
 
-  /* ────────────────────────────────────────────────
-   * 1. Конфиг
-   * ──────────────────────────────────────────────── */
+  /* ── 1. Config ─────────────────────────────────── */
 
   const CONFIG = {
     slider: {
@@ -46,18 +37,14 @@
     resizeDebounce: 250,
   };
 
-  /**
-   * Пока оставляем false, чтобы проверить все анимации.
-   */
+  // Set to true to disable animations for users with reduced-motion preference.
   const RESPECT_REDUCED_MOTION = false;
 
   const REDUCED_MOTION =
     RESPECT_REDUCED_MOTION &&
     (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
 
-  /* ────────────────────────────────────────────────
-   * 2. Утилиты
-   * ──────────────────────────────────────────────── */
+  /* ── 2. Utils ──────────────────────────────────── */
 
   function debounce(fn, wait = 100) {
     let timeout;
@@ -134,9 +121,7 @@
     };
   })();
 
-  /* ────────────────────────────────────────────────
-   * 3. Данные слайдеров из скрытых CMS-нод
-   * ──────────────────────────────────────────────── */
+  /* ── 3. Slider data from hidden CMS nodes ──────── */
 
   function readSlidersData() {
     const items = document.querySelectorAll(".js-data-tabs");
@@ -165,9 +150,7 @@
     return grouped;
   }
 
-  /* ────────────────────────────────────────────────
-   * 4a. Аккордеон брендов
-   * ──────────────────────────────────────────────── */
+  /* ── 4a. Brands accordion ──────────────────────── */
 
   function initBrandsAccordion() {
     const sourceNodes = document.querySelectorAll(".js-data-accordeon");
@@ -304,6 +287,7 @@
       }
     });
 
+    // Preload thumbnails so hover feels instant.
     accordion.querySelectorAll(".has_thumbnail").forEach((element) => {
       imageLoader.load(element.dataset.thumbnail);
     });
@@ -489,9 +473,7 @@
     }
   }
 
-  /* ────────────────────────────────────────────────
-   * 4b. Раскрытие широких картинок-дивайдеров
-   * ──────────────────────────────────────────────── */
+  /* ── 4b. Divider image reveals ─────────────────── */
 
   function initDividerReveals() {
     const dividers = gsap.utils.toArray(".divider_wrapper");
@@ -564,9 +546,7 @@
     return () => media.revert();
   }
 
-  /* ────────────────────────────────────────────────
-   * 4c. Счётчики
-   * ──────────────────────────────────────────────── */
+  /* ── 4c. Counters ──────────────────────────────── */
 
   function initCounters() {
     const section = document.querySelector(".section_parameters");
@@ -632,9 +612,9 @@
     });
   }
 
-  /* ────────────────────────────────────────────────
-   * 4d. Динамические слайдеры
-   * ──────────────────────────────────────────────── */
+  /* ── 4d. Tabbed sliders (ARIA tabs pattern) ────── */
+
+  let sliderUid = 0;
 
   function createTabbedSlider(root, slides) {
     const tabsList = root.querySelector(".slider_tabs-list");
@@ -664,35 +644,45 @@
       progressTween: null,
     };
 
-    /**
-     * Единственное техническое исправление:
-     * защищает от вставки изображений старого слайда,
-     * если их загрузка завершилась после переключения.
-     */
+    // Guards against images of a previous slide landing after a switch.
     let renderVersion = 0;
 
     const canPlay = () => {
       return state.inView && !state.hovered && !state.animating;
     };
 
+    // Unique id base per slider instance for tab/panel wiring.
+    const uid = root.getAttribute("slider-group") || `slider-${++sliderUid}`;
+    const panelId = `panel-${uid}`;
+
     tabsList.innerHTML = "";
     tabsList.setAttribute("role", "tablist");
+    tabsList.setAttribute("aria-label", `${uid} slides`);
+
+    contentItem.setAttribute("role", "tabpanel");
+    contentItem.id = panelId;
+    contentItem.setAttribute("aria-labelledby", `tab-${uid}-0`);
 
     const tabsFragment = document.createDocumentFragment();
 
     slides.forEach((slide, index) => {
       const tab = document.createElement("button");
+      const isFirst = index === 0;
 
       tab.type = "button";
+      tab.id = `tab-${uid}-${index}`;
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", panelId);
+      tab.setAttribute("aria-selected", isFirst ? "true" : "false");
+      // Roving tabindex: only the active tab is in the Tab order.
+      tab.setAttribute("tabindex", isFirst ? "0" : "-1");
 
-      tab.setAttribute("aria-selected", index === 0 ? "true" : "false");
-
-      tab.className = `slider_tab-button${index === 0 ? " is-active" : ""}`;
+      tab.className = `slider_tab-button${isFirst ? " is-active" : ""}`;
 
       tab.innerHTML =
         `<div class="slider_time-overlay"></div>` +
         `<div class="slider_tab-text">${escapeHtml(
-          slide.tabName || `Таб ${index + 1}`
+          slide.tabName || `Tab ${index + 1}`
         )}</div>`;
 
       tab.addEventListener("click", () => {
@@ -722,6 +712,21 @@
 
     const tabButtons = tabsList.querySelectorAll(".slider_tab-button");
 
+    // Arrow-key navigation between tabs.
+    tabsList.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") {
+        return;
+      }
+
+      event.preventDefault();
+
+      const dir = event.key === "ArrowRight" ? 1 : -1;
+      const next = (state.index + dir + slides.length) % slides.length;
+
+      switchToSlide(next);
+      tabButtons[next].focus();
+    });
+
     function renderContent(slide) {
       contentItem.innerHTML =
         `<h3>${escapeHtml(slide.title || "")}</h3>` +
@@ -741,10 +746,7 @@
         })
       );
 
-      /**
-       * Пользователь уже мог перейти на другой слайд,
-       * пока изображения загружались.
-       */
+      // User may have switched slides while images were loading.
       if (version !== renderVersion) {
         return;
       }
@@ -778,9 +780,7 @@
         masks.push(mask);
       });
 
-      /**
-       * Повторная проверка перед изменением DOM.
-       */
+      // Re-check before touching the DOM.
       if (version !== renderVersion) {
         return;
       }
@@ -800,6 +800,8 @@
     function resetOverlays() {
       tabButtons.forEach((button) => {
         button.classList.remove("is-active");
+        button.setAttribute("aria-selected", "false");
+        button.setAttribute("tabindex", "-1");
 
         const overlay = button.querySelector(".slider_time-overlay");
 
@@ -827,7 +829,12 @@
 
       state.index = index;
 
-      tabButtons[index].classList.add("is-active");
+      const activeTab = tabButtons[index];
+
+      activeTab.classList.add("is-active");
+      activeTab.setAttribute("aria-selected", "true");
+      activeTab.setAttribute("tabindex", "0");
+      contentItem.setAttribute("aria-labelledby", activeTab.id);
 
       const slide = slides[index];
 
@@ -934,9 +941,7 @@
     });
   }
 
-  /* ────────────────────────────────────────────────
-   * 4e. Swiper
-   * ──────────────────────────────────────────────── */
+  /* ── 4e. Swiper ────────────────────────────────── */
 
   const CLIP_HIDDEN = "polygon(0% 0%, 0% 0%, 0% 100%, 0% 100%)";
 
@@ -991,6 +996,11 @@
         slidesPerView: "auto",
         spaceBetween: 32,
         speed: 600,
+        a11y: true,
+        keyboard: {
+          enabled: true,
+          onlyInViewport: true,
+        },
         breakpoints: {
           320: {
             slidesPerView: 1.1,
@@ -1040,13 +1050,12 @@
     };
   }
 
-  /* ────────────────────────────────────────────────
-   * 4f. Guestroom tabs
-   * ──────────────────────────────────────────────── */
+  /* ── 4f. Guestroom tabs ────────────────────────── */
 
   function initGuestroomTabs() {
     const { retryAttempts, retryDelay } = CONFIG.guestroomTabs;
 
+    // Swiper may not be initialised yet — retry a few times.
     (function waitForSwiper(attempt = 0) {
       const swiperElement = document.querySelector(".swiper-guestroom");
 
@@ -1083,15 +1092,32 @@
         return;
       }
 
+      // ARIA tabs pattern for the static Webflow markup.
+      const tabsWrapper = swiperElement.querySelector(".tabs");
+
+      if (tabsWrapper) {
+        tabsWrapper.setAttribute("role", "tablist");
+        tabsWrapper.setAttribute("aria-label", "Guestroom slides");
+      }
+
+      tabs.forEach((tab, index) => {
+        tab.setAttribute("role", "tab");
+        tab.setAttribute("aria-selected", index === 0 ? "true" : "false");
+        tab.setAttribute("tabindex", index === 0 ? "0" : "-1");
+      });
+
       const abortController = new AbortController();
+
+      const activateTab = (index) => {
+        swiper.slideTo(index === 0 ? firstIndex : secondIndex, 300);
+      };
 
       tabs.forEach((tab, index) => {
         tab.addEventListener(
           "click",
           (event) => {
             event.preventDefault();
-
-            swiper.slideTo(index === 0 ? firstIndex : secondIndex, 300);
+            activateTab(index);
           },
           {
             signal: abortController.signal,
@@ -1099,13 +1125,44 @@
         );
       });
 
+      tabsWrapper?.addEventListener(
+        "keydown",
+        (event) => {
+          if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") {
+            return;
+          }
+
+          event.preventDefault();
+
+          const current = tabs.findIndex(
+            (tab) => tab.getAttribute("aria-selected") === "true"
+          );
+
+          const next =
+            (Math.max(current, 0) +
+              (event.key === "ArrowRight" ? 1 : -1) +
+              tabs.length) %
+            tabs.length;
+
+          activateTab(next);
+          tabs[next].focus();
+        },
+        {
+          signal: abortController.signal,
+        }
+      );
+
       function updateTabsState() {
         const currentIndex = swiper.activeIndex;
 
         const activeTab = currentIndex >= secondIndex ? 1 : 0;
 
         tabs.forEach((tab, index) => {
-          tab.classList.toggle("is-active", index === activeTab);
+          const isActive = index === activeTab;
+
+          tab.classList.toggle("is-active", isActive);
+          tab.setAttribute("aria-selected", isActive ? "true" : "false");
+          tab.setAttribute("tabindex", isActive ? "0" : "-1");
 
           const overlay = tab.querySelector(".slider_time-overlay");
 
@@ -1115,7 +1172,7 @@
 
           let progress = 0;
 
-          if (index === activeTab) {
+          if (isActive) {
             const groupStart = index === 0 ? firstIndex : secondIndex;
 
             const groupEnd = index === 0 ? secondIndex - 1 : lastIndex;
@@ -1149,9 +1206,7 @@
     }
   }
 
-  /* ────────────────────────────────────────────────
-   * 4g. Заголовки
-   * ──────────────────────────────────────────────── */
+  /* ── 4g. Heading animations ────────────────────── */
 
   function initHeadingAnimations() {
     const headings = document.querySelectorAll(".heading-style-h2");
@@ -1219,13 +1274,11 @@
     });
   }
 
-  /* ────────────────────────────────────────────────
-   * 5. Bootstrap
-   * ──────────────────────────────────────────────── */
+  /* ── 5. Bootstrap ──────────────────────────────── */
 
   function initializeAll() {
     if (typeof gsap === "undefined") {
-      console.warn("[3L] GSAP не загружен — анимации отключены.");
+      console.warn("[3L] GSAP is not loaded — animations disabled.");
 
       return;
     }
@@ -1236,7 +1289,7 @@
 
         if (!loaded) {
           console.warn(
-            `[3L] Плагин ${name} не загружен — зависящие от него функции отключены. Проверьте URL подключения скриптов.`
+            `[3L] Plugin ${name} is not loaded — check script URLs.`
           );
         }
 
@@ -1250,10 +1303,8 @@
 
     const hasSmoother = hasScrollTrigger && plugins.includes("ScrollSmoother");
 
-    const hasSplitText = plugins.includes("SplitText");
-
     if (!hasScrollTrigger) {
-      console.warn("[3L] Без ScrollTrigger скролл-анимации невозможны.");
+      console.warn("[3L] Scroll animations require ScrollTrigger.");
 
       return;
     }
@@ -1303,6 +1354,7 @@
       });
     }
 
+    // Lazy images shift layout — refresh ScrollTrigger as they load.
     document.querySelectorAll('img[loading="lazy"]').forEach((image) => {
       if (!image.complete) {
         image.addEventListener("load", requestScrollRefresh, {
