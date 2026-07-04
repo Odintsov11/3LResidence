@@ -1040,11 +1040,16 @@
         });
       };
 
+      const usesListSemantics = wrapper?.getAttribute("role") === "list";
+
       new Swiper(swiperElement, {
         slidesPerView: "auto",
         spaceBetween: 32,
         speed: 600,
-        a11y: true,
+        a11y: {
+          enabled: true,
+          slideRole: usesListSemantics ? "listitem" : "group",
+        },
         keyboard: {
           enabled: true,
           onlyInViewport: true,
