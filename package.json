@@ -1,0 +1,10 @@
+{
+  "name": "3l-residence-webflow",
+  "private": true,
+  "scripts": {
+    "build": "terser src/main.js -c passes=2 -m --comments false --ecma 2020 -o dist/main.min.js"
+  },
+  "devDependencies": {
+    "terser": "^5.44.0"
+  }
+}
