@@ -84,6 +84,9 @@
             new Promise((resolve) => {
               const image = new Image();
 
+              image.decoding = "async";
+              image.fetchPriority = "low";
+
               image.onload = () => resolve(image);
               image.onerror = () => resolve(null);
               image.src = url;
@@ -516,7 +519,14 @@
   /* ── 4b. Divider image reveals ─────────────────── */
 
   function initDividerReveals() {
-    const dividers = gsap.utils.toArray(".divider_wrapper");
+    const dividers = gsap.utils
+      .toArray(".divider_wrapper")
+      .filter((divider) => {
+        return (
+          !divider.matches("[data-no-reveal]") &&
+          !divider.querySelector('img[fetchpriority="high"]')
+        );
+      });
 
     if (!dividers.length) {
       return;
@@ -959,11 +969,48 @@
 
     imageGrid.setAttribute("grid-template", slides[0].gridTemplate);
 
-    const initialVersion = ++renderVersion;
-
-    appendImages(slides[0], initialVersion);
-
     root.style.display = "";
+
+    let initialImagesRequested = false;
+
+    function loadInitialImages() {
+      if (initialImagesRequested) {
+        return;
+      }
+
+      initialImagesRequested = true;
+
+      const initialVersion = ++renderVersion;
+
+      appendImages(slides[0], initialVersion);
+    }
+
+    /*
+     * Загружаем изображения первого таба только тогда,
+     * когда слайдер приблизился к viewport.
+     */
+    if ("IntersectionObserver" in window) {
+      const imageObserver = new IntersectionObserver(
+        (entries, observer) => {
+          const entry = entries[0];
+
+          if (!entry?.isIntersecting) {
+            return;
+          }
+
+          observer.disconnect();
+          loadInitialImages();
+        },
+        {
+          rootMargin: "600px 0px",
+          threshold: 0,
+        }
+      );
+
+      imageObserver.observe(root);
+    } else {
+      loadInitialImages();
+    }
 
     ScrollTrigger.create({
       trigger: root,
@@ -973,6 +1020,7 @@
         state.inView = self.isActive;
 
         if (self.isActive) {
+          loadInitialImages();
           resumeAutoplay();
         } else {
           state.progressTween?.pause();
