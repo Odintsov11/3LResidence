@@ -1524,14 +1524,6 @@
       });
     }
 
-    // Lazy images shift layout — refresh ScrollTrigger as they load.
-    document.querySelectorAll('img[loading="lazy"]').forEach((image) => {
-      if (!image.complete) {
-        image.addEventListener("load", requestScrollRefresh, {
-          once: true,
-        });
-      }
-    });
 
     requestAnimationFrame(() => {
       initDividerReveals();
